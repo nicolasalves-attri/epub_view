@@ -106,10 +106,6 @@ class _EpubViewState extends State<EpubView> {
       acc.addAll(next.paragraphs);
       return acc;
     });
-
-    print('_paragraphs.length: ${_paragraphs.length}');
-    print('_chapters.length: ${_chapters.length}');
-    print('_capitulos.length: ${_capitulos.length}');
     // _paragraphs = parseParagraphsResult.flatParagraphs;
     // _chapterIndexes.addAll(parseParagraphsResult.chapterIndexes);
 
