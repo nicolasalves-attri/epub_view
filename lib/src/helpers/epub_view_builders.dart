@@ -35,9 +35,6 @@ class EpubViewBuilders<T> {
   /// Root view builder
   final EpubViewBuilder<T> builder;
 
-  final ChaptersBuilder chapterBuilder;
-  final ChapterDividerBuilder chapterDividerBuilder;
-
   /// Widget showing when epub page loading
   final WidgetBuilder? loaderBuilder;
 
@@ -50,8 +47,6 @@ class EpubViewBuilders<T> {
   const EpubViewBuilders({
     required this.options,
     this.builder = _EpubViewState._builder,
-    this.chapterBuilder = _EpubViewState._chapterBuilder,
-    this.chapterDividerBuilder = _EpubViewState._chapterDividerBuilder,
     this.loaderBuilder,
     this.errorBuilder,
   });

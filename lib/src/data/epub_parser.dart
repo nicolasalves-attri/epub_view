@@ -1,5 +1,9 @@
+import 'dart:convert';
+import 'dart:developer';
+
 import 'package:epub_view/src/data/epub_cfi_reader.dart';
 import 'package:html/dom.dart' as dom;
+import 'package:html/dom.dart';
 
 import 'models/paragraph.dart';
 
@@ -28,6 +32,51 @@ List<dom.Element> _removeAllDiv(List<dom.Element> elements) {
   }
 
   return result;
+}
+
+List<EpubPage> parsePages(List<EpubContentFile> contentPages, EpubBook epubBook) {
+  String? filename = '';
+  List<EpubPage> pages = [];
+  List<int> chapterIndexes = [];
+  int pageIndex = 0;
+
+  for (var next in contentPages) {
+    List<Paragraph> paragrafos = [];
+    List<dom.Element> elmList = [];
+    if (filename != next.FileName) {
+      filename = next.FileName;
+      final EpubContentFile? file = epubBook.Content?.AllFiles?[filename];
+      String? content;
+
+      if (file is EpubTextContentFile) {
+        content = file.Content;
+        final document = Document.html(content!);
+        // final result = convertDocumentToElements(document);
+        // elmList = _removeAllDiv(result);
+
+        // String outerHtml = "";
+        // for (var item in elmList) {
+        //   // if (item.localName == 'p') {
+        //   //   outerHtml += '<br>${item.text}<br>';
+        //   // } else {
+        //   // }
+        //   outerHtml += item.outerHtml;
+        // }
+
+        final result = convertDocumentToElements(document);
+        elmList = _removeAllDiv(result);
+        // pages.add(EpubPage(index: pageIndex, fileName: filename!, paragraphs: [], content: outerHtml));
+      }
+    }
+
+    pageIndex++;
+    paragrafos.addAll(elmList.map((element) => Paragraph(element, chapterIndexes.length - 1)));
+    pages.add(EpubPage(index: pageIndex, fileName: filename!, paragraphs: paragrafos));
+    // chapterIndexes.add(acc.length);
+    // acc.addAll(elmList.map((element) => Paragraph(element, chapterIndexes.length - 1)));
+  }
+
+  return pages;
 }
 
 List<Capitulo> parseParagraphs(
@@ -122,6 +171,19 @@ class Capitulo {
   List<Paragraph> paragraphs;
 
   Capitulo({required this.index, required this.chapter, required this.paragraphs});
+
+  void addParagraph(Paragraph paragraph) {
+    paragraphs.add(paragraph);
+  }
+}
+
+class EpubPage {
+  final int index;
+  final String fileName;
+  final String? content;
+  List<Paragraph> paragraphs;
+
+  EpubPage({required this.index, required this.fileName, required this.paragraphs, this.content});
 
   void addParagraph(Paragraph paragraph) {
     paragraphs.add(paragraph);
