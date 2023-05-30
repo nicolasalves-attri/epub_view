@@ -36,6 +36,10 @@ class EpubController {
     _epubViewState?.navigateToPage(page, scroll);
   }
 
+  void navigateToNamedPage(String filename) {
+    _epubViewState?.navigateToNamedPage(filename);
+  }
+
   void nextPage() {
     _epubViewState?.pageController.nextPage(duration: const Duration(milliseconds: 350), curve: Curves.ease);
   }
@@ -45,13 +49,11 @@ class EpubController {
   }
 
   void increaseFontSize() {
-    textStyle = textStyle.copyWith(fontSize: textStyle.fontSize! + 1);
-    _epubViewState?.setState(() {});
+    _epubViewState?.increaseFontSize();
   }
 
   void decreaseFontSize() {
-    textStyle = textStyle.copyWith(fontSize: textStyle.fontSize! - 1);
-    _epubViewState?.setState(() {});
+    _epubViewState?.decreaseFontSize();
   }
 
   final tableOfContentsListenable = ValueNotifier<List<EpubViewChapter>>([]);

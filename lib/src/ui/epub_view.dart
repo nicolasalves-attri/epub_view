@@ -11,6 +11,7 @@ import 'package:epub_view/src/data/models/chapter_view_value.dart';
 import 'package:epub_view/src/data/models/page_position.dart';
 import 'package:epub_view/src/data/models/paragraph.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_html/flutter_html.dart';
@@ -47,6 +48,7 @@ class EpubView extends StatefulWidget {
     this.initialPosition,
     this.highlights,
     this.onHighlightPressed,
+    this.isFullscreen = false,
     Key? key,
   }) : super(key: key);
 
@@ -73,6 +75,8 @@ class EpubView extends StatefulWidget {
   final List<HighlightedText>? highlights;
   final Function(HighlightedText?)? onHighlightPressed;
 
+  final bool isFullscreen;
+
   @override
   State<EpubView> createState() => _EpubViewState();
 }
@@ -94,6 +98,8 @@ class _EpubViewState extends State<EpubView> {
 
   EpubController get _controller => widget.controller;
   List<HighlightedText> get highlights => widget.highlights ?? [];
+
+  num fontSize = 5;
 
   @override
   void initState() {
@@ -214,9 +220,32 @@ class _EpubViewState extends State<EpubView> {
     });
   }
 
-  void increaseFontSize() {}
+  void navigateToNamedPage(String filename) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final page = pages.firstWhereOrNull((e) => e.fileName == filename);
+      if (page != null) {
+        pageController.animateToPage(page.index - 1, duration: const Duration(milliseconds: 350), curve: Curves.ease);
+      }
+    });
+  }
 
-  void decreaseFontSize() {}
+  void increaseFontSize() {
+    log('increaseFontSize');
+    setState(() {
+      if (fontSize < 7) {
+        fontSize += 1;
+      }
+    });
+  }
+
+  void decreaseFontSize() {
+    log('decreaseFontSize');
+    setState(() {
+      if (fontSize > 1) {
+        fontSize -= 1;
+      }
+    });
+  }
 
   void _changeListener() {
     if (_paragraphs.isEmpty || _itemPositionListener!.itemPositions.value.isEmpty) {
@@ -267,8 +296,15 @@ class _EpubViewState extends State<EpubView> {
   void _onLinkPressed(String href) {
     if (href.contains('://')) {
       widget.onExternalLinkPressed?.call(href);
-      return;
+    } else {
+      href = href.replaceFirst('../', '');
+      final page = _controller.pages.firstWhereOrNull((element) => element.fileName.endsWith(href));
+      if (page != null) {
+        navigateToPage(page.index - 1);
+        setState(() {});
+      }
     }
+    return;
 
     // Chapter01.xhtml#ph1_1 -> [ph1_1, Chapter01.xhtml] || [ph1_1]
     String? hrefIdRef;
@@ -394,15 +430,27 @@ class _EpubViewState extends State<EpubView> {
   String parseHightlights(int page, String html) {
     final hightlightsToPage = highlights.where((element) => element.pagePosition.page == page);
 
+    RegExp exp = RegExp(r'<span\b[^>]*>(.*?)</span>', multiLine: true, caseSensitive: false);
+    html = html.replaceAllMapped(exp, (match) => match.group(1) ?? "");
+
     for (var high in hightlightsToPage) {
-      Color textColor = widget.foregroundColor;
-      if (high.color.computeLuminance() < .5) {
-        textColor = widget.backgroundColor;
+      Color textColor = Colors.black;
+
+      if (high.color == const Color(0xFF003B65)) {
+        textColor = Colors.white;
       }
+
+      // if (high.color == const Color(0xFFFFFF00)) {
+      //   textColor = Colors.black;
+      // }
+
+      // if (high.color.computeLuminance() > .5) {
+      //   textColor = widget.foregroundColor;
+      // }
 
       // print(high.text);
       html = html.replaceAll(high.text,
-          '<span class="highlight" highlight-id="${high.id}" text-color="${textColor.value}" style="background-color: #${high.color.value.toRadixString(16).padLeft(6, '0')}; color: #${textColor.value.toRadixString(16).padLeft(6, '0')}">${high.text}</span>');
+          '<span class="highlight" highlight-id="${high.id}" text-color="${textColor.value}" bg-color="${high.color.value}" style="background-color: #${high.color.value.toRadixString(16).padLeft(6, '0')}; color: #${textColor.value.toRadixString(16).padLeft(6, '0')}">${high.text}</span>');
     }
 
     return html;
@@ -439,6 +487,10 @@ ListView.builder(
             ),
   */
 
+  CustomRenderMatcher marcadorTagMatcher() => (context) {
+        return (context.tree.element?.localName == 'span' && context.tree.element?.classes.contains('highlight') == true);
+      };
+
   Widget _buildLoaded(BuildContext context) {
     final defaultBuilder = widget.builders as EpubViewBuilders<DefaultBuilderOptions>;
     final options = defaultBuilder.options;
@@ -451,15 +503,17 @@ ListView.builder(
       itemBuilder: (_, c) => Container(
         // width: pageWidth,
         // height: widget.height,
-        margin: const EdgeInsets.all(25),
+        margin: !widget.isFullscreen ? const EdgeInsets.all(25) : const EdgeInsets.symmetric(horizontal: 25),
         decoration: BoxDecoration(
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(.1),
-              blurRadius: 10,
-              offset: const Offset(0, 5),
-            ),
-          ],
+          boxShadow: !widget.isFullscreen
+              ? [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(.1),
+                    blurRadius: 10,
+                    offset: const Offset(0, 5),
+                  ),
+                ]
+              : null,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: Colors.grey.shade300),
           color: widget.backgroundColor,
@@ -478,13 +532,26 @@ ListView.builder(
                 data: parseHightlights(c, pages[c].paragraphs[p].element.outerHtml),
                 onLinkTap: (href, _, __, ___) => _onLinkPressed(href!),
                 style: {
-                  'html': Style(
-                    // padding: options.paragraphPadding as EdgeInsets?,
+                  '*': Style(
                     color: widget.foregroundColor,
                     fontFamily: widget.fontFamily,
-                  ).merge(Style.fromTextStyle(widget.controller.textStyle)),
+                    fontSize: numberToFontSize('$fontSize'),
+                  ),
+                  'a': Style(textDecoration: TextDecoration.none),
                 },
                 customRenders: {
+                  // tagMatcher('a'): CustomRender.widget(widget: (context, buildChildren) {
+                  //   final String? url = context.tree.element?.attributes['href'];
+                  //   if (url?.startsWith('.') == true) {
+                  //     return GestureDetector(
+                  //       onTap: () => _onLinkPressed(url),
+                  //       child: Text(context.tree.element?.text ?? ""),
+                  //     );
+                  //   }
+
+                  //   return buildChildren;
+                  //   return Text(context.tree.element?.text ?? "");
+                  // }),
                   tagMatcher('img'): CustomRender.widget(widget: (context, buildChildren) {
                     final url = context.tree.element!.attributes['src']!.replaceAll('../', '');
                     return Image(
@@ -494,41 +561,28 @@ ListView.builder(
                       fit: BoxFit.cover,
                     );
                   }),
-                  tagMatcher('span'): CustomRender.widget(widget: (context, buildChildren) {
+                  marcadorTagMatcher(): CustomRender.inlineSpan(inlineSpan: (context, children) {
                     final element = context.tree.element!;
                     final highlightId = element.attributes['highlight-id'];
                     // final textColor = element.attributes['text-color'];
+                    final Color textColor = Color(int.parse(element.attributes['text-color']!));
+                    final Color bgColor = Color(int.parse(element.attributes['bg-color']!));
 
                     if (highlightId != null) {
                       final highlight = highlights.firstWhereOrNull((element) => element.id == int.tryParse(highlightId));
                       if (highlight != null) {
-                        //   return GestureDetector(
-                        //     onTap: () => widget.onHighlightPressed?.call(highlight),
-                        //     child: RichText(
-                        //       text: TextSpan(
-                        //         text: element.text,
-                        //         style: widget.controller.textStyle.copyWith(fontFamily: widget.fontFamily, color: Color(int.tryParse(textColor!)!)),
-                        //       ),
-                        //     ),
-                        //   );
-                        return GestureDetector(
-                          onTap: () => widget.onHighlightPressed?.call(highlight),
-                          child: Html(
-                            data: element.outerHtml,
-                            style: {
-                              '*': Style(
-                                padding: EdgeInsets.zero,
-                                margin: Margins.zero,
-                                display: Display.inline,
-                                fontFamily: widget.fontFamily,
-                              ).merge(Style.fromTextStyle(widget.controller.textStyle))
-                            },
-                          ),
+                        return TextSpan(
+                          text: context.tree.element?.text ?? "",
+                          style: context.style.generateTextStyle().copyWith(color: textColor, backgroundColor: bgColor),
+                          recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(highlight),
                         );
                       }
                     }
 
-                    return Html(data: element.outerHtml);
+                    return TextSpan(
+                      text: context.tree.element?.text ?? "",
+                      style: context.style.generateTextStyle(),
+                    );
                   }),
                 },
               ),
