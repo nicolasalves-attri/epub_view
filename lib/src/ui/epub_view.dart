@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
+import 'dart:math' as mat;
 import 'dart:typed_data';
 
 import 'package:collection/collection.dart' show IterableExtension;
@@ -456,6 +457,32 @@ class _EpubViewState extends State<EpubView> {
     return html;
   }
 
+  matchesHighlights(int page, String html) {
+    final hightlightsToPage = highlights.where((element) => element.pagePosition.page == page);
+
+    for (var high in hightlightsToPage) {
+      Color textColor = Colors.black;
+
+      if (high.color == const Color(0xFF003B65)) {
+        textColor = Colors.white;
+      }
+
+      // if (high.color == const Color(0xFFFFFF00)) {
+      //   textColor = Colors.black;
+      // }
+
+      // if (high.color.computeLuminance() > .5) {
+      //   textColor = widget.foregroundColor;
+      // }
+
+      // print(high.text);
+      html = html.replaceAll(high.text,
+          '<span class="highlight" highlight-id="${high.id}" text-color="${textColor.value}" bg-color="${high.color.value}" style="background-color: #${high.color.value.toRadixString(16).padLeft(6, '0')}; color: #${textColor.value.toRadixString(16).padLeft(6, '0')}">${high.text}</span>');
+    }
+
+    return html;
+  }
+
   /*
 ListView.builder(
               controller: scrollController,
@@ -490,6 +517,22 @@ ListView.builder(
   CustomRenderMatcher marcadorTagMatcher() => (context) {
         return (context.tree.element?.localName == 'span' && context.tree.element?.classes.contains('highlight') == true);
       };
+  CustomRenderMatcher paragrafoTagMatcher() => (context) {
+        List<String> tags = ['p', 'h3', 'h1', 'li'];
+        bool isText = (tags.contains(context.tree.element?.localName) && context.tree.element?.classes.contains('imagem') == false) ||
+            (context.tree.element?.classes.contains('capitulo') == true);
+        return isText;
+      };
+  List<InlineSpan> _getListElementChildren(ListStylePosition? position, Function() buildChildren) {
+    List<InlineSpan> children = buildChildren.call();
+    if (position == ListStylePosition.inside) {
+      const tabSpan = WidgetSpan(
+        child: Text("\t", textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w400)),
+      );
+      children.insert(0, tabSpan);
+    }
+    return children;
+  }
 
   Widget _buildLoaded(BuildContext context) {
     final defaultBuilder = widget.builders as EpubViewBuilders<DefaultBuilderOptions>;
@@ -515,79 +558,285 @@ ListView.builder(
                 ]
               : null,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.grey.shade300),
-          color: widget.backgroundColor,
+          border: !widget.isFullscreen ? Border.all(color: Colors.grey.shade300) : null,
+          color: widget.isFullscreen ? null : widget.backgroundColor,
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(20),
-          child: ListView.builder(
-            controller: scrollController,
-            scrollDirection: Axis.vertical,
-            itemCount: pages[c].paragraphs.length,
-            itemBuilder: (_, p) => SelectionArea(
-              selectionControls: widget.selectionToolbar,
-              onSelectionChanged: widget.onSelectionChanged,
-              child: Html(
-                shrinkWrap: true,
-                data: parseHightlights(c, pages[c].paragraphs[p].element.outerHtml),
-                onLinkTap: (href, _, __, ___) => _onLinkPressed(href!),
-                style: {
-                  '*': Style(
-                    color: widget.foregroundColor,
-                    fontFamily: widget.fontFamily,
-                    fontSize: numberToFontSize('$fontSize'),
-                  ),
-                  'a': Style(textDecoration: TextDecoration.none),
-                },
-                customRenders: {
-                  // tagMatcher('a'): CustomRender.widget(widget: (context, buildChildren) {
-                  //   final String? url = context.tree.element?.attributes['href'];
-                  //   if (url?.startsWith('.') == true) {
-                  //     return GestureDetector(
-                  //       onTap: () => _onLinkPressed(url),
-                  //       child: Text(context.tree.element?.text ?? ""),
-                  //     );
-                  //   }
+          child: LayoutBuilder(
+              builder: (context, constraints) => ListView.builder(
+                    controller: scrollController,
+                    scrollDirection: Axis.vertical,
+                    itemCount: pages[c].paragraphs.length,
+                    itemBuilder: (_, p) => SelectionArea(
+                      selectionControls: widget.selectionToolbar,
+                      onSelectionChanged: widget.onSelectionChanged,
+                      child: Html(
+                        shrinkWrap: true,
+                        data: pages[c].paragraphs[p].element.outerHtml,
+                        // data: parseHightlights(c, pages[c].paragraphs[p].element.outerHtml),
+                        onLinkTap: (href, _, __, ___) => _onLinkPressed(href!),
+                        style: {
+                          '*': Style(
+                            color: widget.foregroundColor,
+                            fontFamily: widget.fontFamily,
+                            fontSize: numberToFontSize('$fontSize'),
+                            textAlign: TextAlign.justify,
+                          ),
+                          'a': Style(textDecoration: TextDecoration.none),
+                        },
+                        customRenders: {
+                          // tagMatcher('a'): CustomRender.widget(widget: (context, buildChildren) {
+                          //   final String? url = context.tree.element?.attributes['href'];
+                          //   if (url?.startsWith('.') == true) {
+                          //     return GestureDetector(
+                          //       onTap: () => _onLinkPressed(url),
+                          //       child: Text(context.tree.element?.text ?? ""),
+                          //     );
+                          //   }
 
-                  //   return buildChildren;
-                  //   return Text(context.tree.element?.text ?? "");
-                  // }),
-                  tagMatcher('img'): CustomRender.widget(widget: (context, buildChildren) {
-                    final url = context.tree.element!.attributes['src']!.replaceAll('../', '');
-                    return Image(
-                      image: MemoryImage(
-                        Uint8List.fromList(widget.controller._document!.Content!.Images![url]!.Content!),
+                          //   return buildChildren;
+                          //   return Text(context.tree.element?.text ?? "");
+                          // }),
+                          paragrafoTagMatcher(): CustomRender.inlineSpan(inlineSpan: (context, buildChildren) {
+                            var originalText = context.tree.element?.text.trim();
+
+                            if (originalText == null || originalText.trim() == "") {
+                              return const TextSpan();
+                            }
+
+                            // var originalText = (context.tree as TextContentElement).text?.trim();
+                            var marcacoesNaPage = highlights.where((element) => element.pagePosition.page == c).toList();
+                            // caso não tenha nenhuma marcação, exibe apenas o texto limpo
+                            if (marcacoesNaPage.isEmpty) {
+                              return WidgetSpan(
+                                child: CssBoxWidget(
+                                  key: context.key,
+                                  style: Style(),
+                                  shrinkWrap: context.parser.shrinkWrap,
+                                  child: CssBoxWidget.withInlineSpanChildren(
+                                    style: context.tree.style,
+                                    children: [
+                                      if (context.tree.element?.localName == 'li') const TextSpan(text: '\t•\t'),
+                                      TextSpan(
+                                        text: originalText,
+                                        style: context.style.generateTextStyle(),
+                                      )
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }
+
+                            // buildChildren()
+                            //             .map((e) => TextSpan(text: originalText, style: context.tree.style.generateTextStyle()))
+                            //             .toList(),
+
+                            // print('full: ${jsonEncode(originalText)} / ${marcacoesNaPage.length}');
+
+                            // for (var tr in marcacoesNaPage) {
+                            //   print('tr: ${jsonEncode(tr.text)}');
+                            // }
+
+                            // caso a marcação seja o paragrafo inteiro
+                            // final singleHigh = marcacoesNaPage.singleWhereOrNull((element) => element.text == originalText?.trim());
+
+                            // if (singleHigh != null) {
+                            //   var high = marcacoesNaPage.first;
+                            //   Color textColor = Colors.black;
+
+                            //   if (high.color == const Color(0xFF003B65)) {
+                            //     textColor = Colors.white;
+                            //   }
+
+                            //   return TextSpan(
+                            //     text: originalText,
+                            //     style: TextStyle(color: textColor, backgroundColor: high.color),
+                            //     recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(high),
+                            //   );
+                            // }
+
+                            String marcacoes = marcacoesNaPage.map((e) => e.text).map((e) => '($e)').join('|').toString();
+                            RegExp regex = RegExp(marcacoes);
+
+                            Iterable<Match> matches = regex.allMatches(originalText);
+
+                            int lastIndex = 0;
+                            List<InlineSpan> children = [];
+
+                            for (Match match in matches) {
+                              int startIndex = match.start;
+                              int endIndex = match.end;
+
+                              String? trechoAntes = originalText.substring(lastIndex, startIndex);
+                              String? trechoMarcado = match.group(0);
+
+                              var high = marcacoesNaPage.firstWhere((element) => element.text == trechoMarcado);
+
+                              Color textColor = Colors.black;
+
+                              if (high.color == const Color(0xFF003B65)) {
+                                textColor = Colors.white;
+                              }
+
+                              // if (context.tree.element?.localName == 'li') children.add(const TextSpan(text: '•\t'));
+
+                              children.add(TextSpan(text: trechoAntes));
+
+                              if (trechoMarcado != null && trechoMarcado != "") {
+                                children.add(TextSpan(
+                                  text: trechoMarcado,
+                                  style: TextStyle(color: textColor, backgroundColor: high.color),
+                                  recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(high),
+                                ));
+
+                                if (originalText.substring(match.end, (match.end < originalText.length ? match.end + 1 : originalText.length)) ==
+                                    " ") {
+                                  // adiciona um espaço
+                                  children.add(const TextSpan(text: '\r'));
+                                }
+                              }
+
+                              lastIndex = endIndex;
+                            }
+
+                            if (lastIndex < (originalText.length)) {
+                              String trechoDepois = originalText.substring(lastIndex).trim();
+                              if (trechoDepois != "") {
+                                children.add(TextSpan(text: trechoDepois));
+                              }
+                            }
+
+                            // var matches = regex.allMatches(originalText ?? "");
+                            // for (var match in matches) {
+                            //   print(match.group(0));
+                            // }
+                            return WidgetSpan(
+                              child: CssBoxWidget(
+                                key: context.key,
+                                style: Style(),
+                                shrinkWrap: context.parser.shrinkWrap,
+                                child: CssBoxWidget.withInlineSpanChildren(
+                                  style: context.tree.style,
+                                  children: [
+                                    if (context.tree.element?.localName == 'li') const TextSpan(text: '\t•\t'),
+                                    ...children,
+                                  ],
+                                ),
+                              ),
+                            );
+
+                            if (originalText == null || originalText.trim() == "") {
+                              return const TextSpan();
+                            } else {
+                              // var originalText = parseHightlights(c, (context.tree as TextContentElement).text ?? "");
+
+                              return TextSpan(
+                                // text: originalText,
+                                children: children,
+                                style: context.style.generateTextStyle(),
+                              );
+                            }
+                          }),
+                          tagMatcher('11'): CustomRender.inlineSpan(
+                            inlineSpan: (context, buildChildren) {
+                              return WidgetSpan(
+                                child: CssBoxWidget(
+                                  key: context.key,
+                                  style: context.tree.style,
+                                  shrinkWrap: context.parser.shrinkWrap,
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    textDirection: context.tree.style.direction,
+                                    children: [
+                                      context.tree.style.listStylePosition == ListStylePosition.outside
+                                          ? Padding(
+                                              padding: context.tree.style.padding?.nonNegative ??
+                                                  EdgeInsets.only(
+                                                      left: (context.tree.style.direction) != TextDirection.rtl ? 10.0 : 0.0,
+                                                      right: (context.tree.style.direction) == TextDirection.rtl ? 10.0 : 0.0),
+                                              child: context.style.markerContent)
+                                          : const SizedBox(height: 0, width: 0),
+                                      const Text("\u0020", textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w400)),
+                                      Expanded(
+                                        child: Padding(
+                                          padding: (context.tree.style.listStylePosition) == ListStylePosition.inside
+                                              ? EdgeInsets.only(
+                                                  left: (context.tree.style.direction) != TextDirection.rtl ? 10.0 : 0.0,
+                                                  right: (context.tree.style.direction) == TextDirection.rtl ? 10.0 : 0.0)
+                                              : EdgeInsets.zero,
+                                          child: CssBoxWidget.withInlineSpanChildren(
+                                            children: _getListElementChildren(context.tree.style.listStylePosition, buildChildren)
+                                              ..insertAll(
+                                                  0,
+                                                  context.tree.style.listStylePosition == ListStylePosition.inside
+                                                      ? [
+                                                          WidgetSpan(
+                                                              alignment: PlaceholderAlignment.middle,
+                                                              child: context.style.markerContent ?? const SizedBox(height: 0, width: 0))
+                                                        ]
+                                                      : []),
+                                            style: context.style,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          tagMatcher('img'): CustomRender.widget(widget: (context, buildChildren) {
+                            final url = context.tree.element!.attributes['src']!.replaceAll('../', '');
+                            if (pages[c].fileName.endsWith('capa.xhtml') ||
+                                pages[c].fileName.endsWith('rosto.xhtml') ||
+                                pages[c].fileName.contains('capa')) {
+                              return Container(
+                                alignment: Alignment.center,
+                                height: constraints.maxHeight,
+                                child: Image(
+                                  image: MemoryImage(Uint8List.fromList(widget.controller._document!.Content!.Images![url]!.Content!)),
+                                  fit: BoxFit.cover,
+                                ),
+                              );
+                            }
+
+                            return Container(
+                              alignment: Alignment.center,
+                              child: Image(
+                                image: MemoryImage(Uint8List.fromList(widget.controller._document!.Content!.Images![url]!.Content!)),
+                                fit: BoxFit.cover,
+                              ),
+                            );
+                          }),
+                          marcadorTagMatcher(): CustomRender.inlineSpan(inlineSpan: (context, children) {
+                            final element = context.tree.element!;
+                            final highlightId = element.attributes['highlight-id'];
+                            // final textColor = element.attributes['text-color'];
+                            final Color textColor = Color(int.parse(element.attributes['text-color']!));
+                            final Color bgColor = Color(int.parse(element.attributes['bg-color']!));
+
+                            if (highlightId != null) {
+                              final highlight = highlights.firstWhereOrNull((element) => element.id == int.tryParse(highlightId));
+                              if (highlight != null) {
+                                return TextSpan(
+                                  text: context.tree.element?.text ?? "",
+                                  style: context.style.generateTextStyle().copyWith(color: textColor, backgroundColor: bgColor),
+                                  recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(highlight),
+                                );
+                              }
+                            }
+
+                            return TextSpan(
+                              text: context.tree.element?.text ?? "",
+                              style: context.style.generateTextStyle(),
+                            );
+                          }),
+                        },
                       ),
-                      fit: BoxFit.cover,
-                    );
-                  }),
-                  marcadorTagMatcher(): CustomRender.inlineSpan(inlineSpan: (context, children) {
-                    final element = context.tree.element!;
-                    final highlightId = element.attributes['highlight-id'];
-                    // final textColor = element.attributes['text-color'];
-                    final Color textColor = Color(int.parse(element.attributes['text-color']!));
-                    final Color bgColor = Color(int.parse(element.attributes['bg-color']!));
-
-                    if (highlightId != null) {
-                      final highlight = highlights.firstWhereOrNull((element) => element.id == int.tryParse(highlightId));
-                      if (highlight != null) {
-                        return TextSpan(
-                          text: context.tree.element?.text ?? "",
-                          style: context.style.generateTextStyle().copyWith(color: textColor, backgroundColor: bgColor),
-                          recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(highlight),
-                        );
-                      }
-                    }
-
-                    return TextSpan(
-                      text: context.tree.element?.text ?? "",
-                      style: context.style.generateTextStyle(),
-                    );
-                  }),
-                },
-              ),
-            ),
-          ),
+                    ),
+                  )),
         ),
       ),
     );
