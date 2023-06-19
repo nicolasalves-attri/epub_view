@@ -1,7 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:developer';
-import 'dart:math' as mat;
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:collection/collection.dart' show IterableExtension;
@@ -11,17 +10,19 @@ import 'package:epub_view/src/data/models/chapter.dart';
 import 'package:epub_view/src/data/models/chapter_view_value.dart';
 import 'package:epub_view/src/data/models/page_position.dart';
 import 'package:epub_view/src/data/models/paragraph.dart';
-import 'package:flutter/cupertino.dart';
+import 'package:epub_view/src/helpers/size_reporting_widget.dart';
+import 'package:epubx/src/schema/opf/epub_manifest_item.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
-export 'package:epubx/epubx.dart' hide Image;
-import 'package:epubx/src/schema/opf/epub_manifest_item.dart';
-
 import '../data/models/hightlight_text.dart';
+import '../helpers/widget_onload_reporting.dart';
+
+export 'package:epubx/epubx.dart' hide Image;
 
 part '../epub_controller.dart';
 part '../helpers/epub_view_builders.dart';
@@ -49,6 +50,7 @@ class EpubView extends StatefulWidget {
     this.initialPosition,
     this.highlights,
     this.onHighlightPressed,
+    this.onPointerUp,
     this.isFullscreen = false,
     Key? key,
   }) : super(key: key);
@@ -63,6 +65,7 @@ class EpubView extends StatefulWidget {
 
   /// Called when a document loading error
   final void Function(Exception? error)? onDocumentError;
+  final void Function(PointerUpEvent event)? onPointerUp;
 
   /// Builders
   final EpubViewBuilders builders;
@@ -94,11 +97,17 @@ class _EpubViewState extends State<EpubView> {
   final _chapterIndexes = <int>[];
   late final PageController pageController;
   ScrollController scrollController = ScrollController();
+  // List<PageController> scrollControllers = [];
 
   List<EpubPage> get pages => widget.controller.pages;
+  Map<String, GlobalKey> pagesKey = {};
+  Map<int, GlobalKey> paragraphKeys = {};
+  double pageWidth = 0;
 
   EpubController get _controller => widget.controller;
   List<HighlightedText> get highlights => widget.highlights ?? [];
+
+  bool loadedInitialPage = false;
 
   num fontSize = 5;
 
@@ -106,10 +115,7 @@ class _EpubViewState extends State<EpubView> {
   void initState() {
     super.initState();
 
-    pageController = PageController(initialPage: widget.initialPosition?.page ?? 0);
-    if (widget.initialPosition != null) {
-      updatePagePosition(widget.initialPosition!.page);
-    }
+    pageController = PageController();
 
     _itemScrollController = ItemScrollController();
     _itemPositionListener = ItemPositionsListener.create();
@@ -133,101 +139,152 @@ class _EpubViewState extends State<EpubView> {
   }
 
   @override
+  void didUpdateWidget(covariant EpubView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // _controller.isBookLoaded.value = false;
+  }
+
+  @override
   void dispose() {
     _itemPositionListener!.itemPositions.removeListener(_changeListener);
     _controller._detach();
+
+    // for (var controller in scrollControllers) {
+    //   controller.dispose();
+    // }
+
+    pageController.dispose();
+
     super.dispose();
   }
 
-  Future<bool> _init() async {
+  Future<bool> init() async {
     if (_controller.isBookLoaded.value) {
       return true;
     }
 
-    scrollController.addListener(() => updateScrollPosition());
+    // for (var i = 0; i < pages.length; i++) {
+    //   scrollControllers.add(PageController());
+    // }
 
     _chapters = parseChapters(_controller._document!);
-
-    // _capitulos = parseParagraphs(_chapters, _controller._document!.Content);
-    // _paragraphs = _capitulos.fold([], (acc, next) {
-    //   acc.addAll(next.paragraphs);
-    //   return acc;
-    // });
-
-    // _paragraphs = parseParagraphsResult.flatParagraphs;
-    // _chapterIndexes.addAll(parseParagraphsResult.chapterIndexes);
-    // pageController.addListener(() {
-    //   final currentPage = pages.firstWhereIndexedOrNull((i, a) => i == pageController.page?.round())?.fileName;
-    //   if (currentPage != null) {
-    //     final position = PagePosition(
-    //       page: currentPage,
-    //       scrollPosition: 0.0,
-    //     );
-
-    //     print(position.toJson());
-    //   }
-    // });
 
     _epubCfiReader = EpubCfiReader.parser(
       cfiInput: _controller.epubCfi,
       chapters: _chapters,
       paragraphs: _paragraphs,
     );
+
     _itemPositionListener!.itemPositions.addListener(_changeListener);
     _controller.isBookLoaded.value = true;
 
     return true;
   }
 
-  void updatePagePosition(int page) {
-    if (!mounted) return;
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      widget.controller.position.value = EpubPagePosition(
-        page: page,
-        totalPages: widget.controller.totalPages,
-        scrollPosition: 0,
-      );
-    });
+  void update() {
+    print('Atualizando o leitor');
+    setState(() {});
   }
 
-  Timer? delayUpdateScroll;
+  // void _checkScrollPosition(int index) {
+  //   log('_checkScrollPosition($index)');
+  //   final scrollController = scrollControllers[index];
+  //   int innerPages = (scrollController.position.maxScrollExtent / pageWidth).round();
 
-  void updateScrollPosition() async {
-    if (delayUpdateScroll != null) {
-      delayUpdateScroll!.cancel();
+  //   if (scrollController.position.pixels == scrollController.position.maxScrollExtent) {
+  //     if (index == scrollControllers.length - 1) {
+  //       pageController.nextPage(
+  //         duration: const Duration(milliseconds: 300),
+  //         curve: Curves.ease,
+  //       );
+  //     }
+  //   }
+  // }
+
+  void nextPage() {
+    log('nextPage()');
+    if (pageController.hasClients) {
+      pageController.nextPage(duration: const Duration(milliseconds: 350), curve: Curves.ease);
     }
 
-    delayUpdateScroll = Timer(const Duration(seconds: 1), () {
-      log('delayUpdateScroll');
-      delayUpdateScroll = null;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        widget.controller.position.value = EpubPagePosition(
-          page: pageController.page?.round() ?? 0,
-          totalPages: widget.controller.totalPages,
-          scrollPosition: scrollController.offset.round(),
-        );
-      });
-    });
+    // var scroll = scrollControllers[pageController.page!.round()];
+    // if (scroll.position.pixels < scroll.position.maxScrollExtent) {
+    //   print('avancando a page interna');
+    //   scroll.nextPage(duration: const Duration(milliseconds: 350), curve: Curves.ease);
+    // } else {
+    //   pageController.nextPage(duration: const Duration(milliseconds: 350), curve: Curves.ease);
+    // }
+
+    // updatePagePosition();
   }
 
-  void navigateToPage(int page, [int? scroll]) {
+  void prevPage() {
+    if (pageController.hasClients) {
+      pageController.previousPage(duration: const Duration(milliseconds: 250), curve: Curves.ease);
+    }
+  }
+
+  int get totalPages {
+    log('totalPages');
+    if (!pageController.hasClients) return 0;
+
+    double viewport = pageController.position.viewportDimension;
+    print(pageController.position.maxScrollExtent);
+    return (pageController.position.maxScrollExtent ~/ pageWidth).round();
+  }
+
+  void updateTotalPages() {
+    log('updateTotalPages');
+    _controller.totalPages.value = totalPages;
+  }
+
+  void updatePagePosition() {
+    if (!mounted) return;
+    log('updatePagePosition()');
+
+    if (pageController.hasClients) {
+      _controller.currentPage.value = pageController.page!.round();
+    } else {
+      _controller.currentPage.value = 1;
+    }
+  }
+
+  bool avancouPrimeiraPagina = false;
+  Future<void> gotoInitialPage() async {
+    if (avancouPrimeiraPagina) return;
+    log('gotoInitialPage');
+
+    if (widget.initialPosition != null) {
+      if (widget.initialPosition!.page < totalPages) {
+        pageController.jumpToPage(widget.initialPosition!.page);
+      } else {
+        pageController.jumpToPage(totalPages - 1);
+      }
+    }
+
+    avancouPrimeiraPagina = true;
+  }
+
+  void navigateToParagraph(int index) {
+    if (pageController.hasClients && paragraphKeys[index] != null) {
+      Scrollable.ensureVisible(paragraphKeys[index]!.currentContext!);
+    }
+  }
+
+  void navigateToPage(int page, [double? scroll]) {
+    log('navigateToPage($page)');
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      pageController.animateToPage(page, duration: const Duration(milliseconds: 350), curve: Curves.ease).then((value) {
-        if (scroll != null) {
-          scrollController.jumpTo(scroll.toDouble());
-        }
-      });
+      pageController.jumpToPage(page);
     });
   }
 
   void navigateToNamedPage(String filename) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final page = pages.firstWhereOrNull((e) => e.fileName == filename);
-      if (page != null) {
-        pageController.animateToPage(page.index - 1, duration: const Duration(milliseconds: 350), curve: Curves.ease);
-      }
-    });
+    log('navigateToNamedPage($filename)');
+    var pageKey = pagesKey[filename];
+    if (pageKey != null && pageController.hasClients) {
+      Scrollable.ensureVisible(pageKey.currentContext!);
+    }
   }
 
   void increaseFontSize() {
@@ -305,73 +362,7 @@ class _EpubViewState extends State<EpubView> {
         setState(() {});
       }
     }
-    return;
-
-    // Chapter01.xhtml#ph1_1 -> [ph1_1, Chapter01.xhtml] || [ph1_1]
-    String? hrefIdRef;
-    String? hrefFileName;
-
-    if (href.contains('#')) {
-      final dividedHref = href.split('#');
-      if (dividedHref.length == 1) {
-        hrefIdRef = href;
-      } else {
-        hrefFileName = dividedHref[0];
-        hrefIdRef = dividedHref[1];
-      }
-    } else {
-      hrefFileName = href;
-    }
-
-    if (hrefIdRef == null) {
-      final chapter = _chapterByFileName(hrefFileName);
-      if (chapter != null) {
-        final cfi = _epubCfiReader?.generateCfiChapter(
-          book: _controller._document,
-          chapter: chapter,
-          additional: ['/4/2'],
-        );
-
-        _gotoEpubCfi(cfi);
-      }
-      return;
-    } else {
-      final paragraph = _paragraphByIdRef(hrefIdRef);
-      final chapter = paragraph != null ? _chapters[paragraph.chapterIndex] : null;
-
-      if (chapter != null && paragraph != null) {
-        final paragraphIndex = _epubCfiReader?.getParagraphIndexByElement(paragraph.element);
-        final cfi = _epubCfiReader?.generateCfi(
-          book: _controller._document,
-          chapter: chapter,
-          paragraphIndex: paragraphIndex,
-        );
-
-        _gotoEpubCfi(cfi);
-      }
-
-      return;
-    }
   }
-
-  Paragraph? _paragraphByIdRef(String idRef) => _paragraphs.firstWhereOrNull((paragraph) {
-        if (paragraph.element.id == idRef) {
-          return true;
-        }
-
-        return paragraph.element.children.isNotEmpty && paragraph.element.children[0].id == idRef;
-      });
-
-  EpubChapter? _chapterByFileName(String? fileName) => _chapters.firstWhereOrNull((chapter) {
-        if (fileName != null) {
-          if (chapter.ContentFileName!.contains(fileName)) {
-            return true;
-          } else {
-            return false;
-          }
-        }
-        return false;
-      });
 
   int _getChapterIndexBy({
     required int positionIndex,
@@ -428,99 +419,13 @@ class _EpubViewState extends State<EpubView> {
     return posIndex;
   }
 
-  String parseHightlights(int page, String html) {
-    final hightlightsToPage = highlights.where((element) => element.pagePosition.page == page);
-
-    RegExp exp = RegExp(r'<span\b[^>]*>(.*?)</span>', multiLine: true, caseSensitive: false);
-    html = html.replaceAllMapped(exp, (match) => match.group(1) ?? "");
-
-    for (var high in hightlightsToPage) {
-      Color textColor = Colors.black;
-
-      if (high.color == const Color(0xFF003B65)) {
-        textColor = Colors.white;
-      }
-
-      // if (high.color == const Color(0xFFFFFF00)) {
-      //   textColor = Colors.black;
-      // }
-
-      // if (high.color.computeLuminance() > .5) {
-      //   textColor = widget.foregroundColor;
-      // }
-
-      // print(high.text);
-      html = html.replaceAll(high.text,
-          '<span class="highlight" highlight-id="${high.id}" text-color="${textColor.value}" bg-color="${high.color.value}" style="background-color: #${high.color.value.toRadixString(16).padLeft(6, '0')}; color: #${textColor.value.toRadixString(16).padLeft(6, '0')}">${high.text}</span>');
-    }
-
-    return html;
-  }
-
-  matchesHighlights(int page, String html) {
-    final hightlightsToPage = highlights.where((element) => element.pagePosition.page == page);
-
-    for (var high in hightlightsToPage) {
-      Color textColor = Colors.black;
-
-      if (high.color == const Color(0xFF003B65)) {
-        textColor = Colors.white;
-      }
-
-      // if (high.color == const Color(0xFFFFFF00)) {
-      //   textColor = Colors.black;
-      // }
-
-      // if (high.color.computeLuminance() > .5) {
-      //   textColor = widget.foregroundColor;
-      // }
-
-      // print(high.text);
-      html = html.replaceAll(high.text,
-          '<span class="highlight" highlight-id="${high.id}" text-color="${textColor.value}" bg-color="${high.color.value}" style="background-color: #${high.color.value.toRadixString(16).padLeft(6, '0')}; color: #${textColor.value.toRadixString(16).padLeft(6, '0')}">${high.text}</span>');
-    }
-
-    return html;
-  }
-
-  /*
-ListView.builder(
-              controller: scrollController,
-              scrollDirection: Axis.vertical,
-              itemCount: pages[c].paragraphs.length,
-              itemBuilder: (_, p) => Html(
-                shrinkWrap: true,
-                data: parseHightlights(c, pages[c].paragraphs[p].element.outerHtml),
-                onLinkTap: (href, _, __, ___) => _onLinkPressed(href!),
-                style: {
-                  'html': Style(
-                    padding: options.paragraphPadding as EdgeInsets?,
-                    color: widget.foregroundColor,
-                    fontFamily: widget.fontFamily,
-                  ).merge(Style.fromTextStyle(widget.controller.textStyle)),
-                },
-                customRenders: {
-                  tagMatcher('img'): CustomRender.widget(widget: (context, buildChildren) {
-                    final url = context.tree.element!.attributes['src']!.replaceAll('../', '');
-                    return Image(
-                      image: MemoryImage(
-                        Uint8List.fromList(widget.controller._document!.Content!.Images![url]!.Content!),
-                      ),
-                      fit: BoxFit.cover,
-                    );
-                  }),
-                },
-              ),
-            ),
-  */
-
   CustomRenderMatcher marcadorTagMatcher() => (context) {
         return (context.tree.element?.localName == 'span' && context.tree.element?.classes.contains('highlight') == true);
       };
   CustomRenderMatcher paragrafoTagMatcher() => (context) {
         List<String> tags = ['p', 'h3', 'h1', 'li'];
-        bool isText = (tags.contains(context.tree.element?.localName) && context.tree.element?.classes.contains('imagem') == false) ||
-            (context.tree.element?.classes.contains('capitulo') == true);
+        bool isText = (tags.contains(context.tree.element?.localName) && (context.tree.element?.classes.contains('imagem') == false) ||
+            (context.tree.element?.classes.contains('capitulo') == true));
         return isText;
       };
   List<InlineSpan> _getListElementChildren(ListStylePosition? position, Function() buildChildren) {
@@ -534,310 +439,309 @@ ListView.builder(
     return children;
   }
 
+  Widget itemParagraph(Paragraph ph, int page) {
+    return Listener(
+      onPointerUp: widget.onPointerUp,
+      onPointerDown: (event) => _controller.paragraphTouched = ph.paragraphIndex,
+      child: SelectionArea(
+        selectionControls: widget.selectionToolbar,
+        onSelectionChanged: widget.onSelectionChanged,
+        child: Html(
+          shrinkWrap: true,
+          data: ph.element.outerHtml,
+          onLinkTap: (href, _, __, ___) => _onLinkPressed(href!),
+          style: {
+            '*': Style(
+              color: widget.foregroundColor,
+              fontFamily: widget.fontFamily,
+              fontSize: numberToFontSize('$fontSize'),
+              textAlign: TextAlign.justify,
+            ),
+            'a': Style(textDecoration: TextDecoration.none),
+          },
+          customRenders: {
+            paragrafoTagMatcher(): CustomRender.inlineSpan(inlineSpan: (context, buildChildren) {
+              var originalText = context.tree.element?.text.trim();
+
+              if (originalText == null || originalText.trim() == "") {
+                return const TextSpan();
+              }
+
+              // var originalText = (context.tree as TextContentElement).text?.trim();
+              var marcacoesNaPage = highlights.where((element) => element.paragraphIndex == ph.paragraphIndex).toList();
+              // caso não tenha nenhuma marcação, exibe apenas o texto limpo
+              if (marcacoesNaPage.isEmpty) {
+                return WidgetSpan(
+                  child: CssBoxWidget(
+                    key: context.key,
+                    style: Style(),
+                    shrinkWrap: context.parser.shrinkWrap,
+                    child: CssBoxWidget.withInlineSpanChildren(
+                      style: context.tree.style,
+                      children: [
+                        if (context.tree.element?.localName == 'li') const TextSpan(text: '\t•\t'),
+                        TextSpan(
+                          text: originalText,
+                          style: context.style.generateTextStyle(),
+                        )
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              String marcacoes = marcacoesNaPage.map((e) => e.text).map((e) => '($e)').join('|').toString();
+              RegExp regex = RegExp(marcacoes);
+
+              Iterable<Match> matches = regex.allMatches(originalText);
+
+              int lastIndex = 0;
+              List<InlineSpan> children = [];
+
+              for (Match match in matches) {
+                int startIndex = match.start;
+                int endIndex = match.end;
+
+                String? trechoAntes = originalText.substring(lastIndex, startIndex);
+                String? trechoMarcado = match.group(0);
+
+                var high = marcacoesNaPage.firstWhere((element) => element.text == trechoMarcado);
+
+                Color textColor = Colors.black;
+
+                if (high.color == const Color(0xFF003B65)) {
+                  textColor = Colors.white;
+                }
+
+                children.add(TextSpan(text: trechoAntes));
+
+                if (trechoMarcado != null && trechoMarcado != "") {
+                  children.add(TextSpan(
+                    text: trechoMarcado,
+                    style: TextStyle(color: textColor, backgroundColor: high.color),
+                    recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(high),
+                  ));
+
+                  if (originalText.substring(match.end, (match.end < originalText.length ? match.end + 1 : originalText.length)) == " ") {
+                    // adiciona um espaço
+                    children.add(const TextSpan(text: '\r'));
+                  }
+                }
+
+                lastIndex = endIndex;
+              }
+
+              if (lastIndex < (originalText.length)) {
+                String trechoDepois = originalText.substring(lastIndex).trim();
+                if (trechoDepois != "") {
+                  children.add(TextSpan(text: trechoDepois));
+                }
+              }
+
+              return WidgetSpan(
+                child: CssBoxWidget(
+                  key: context.key,
+                  style: context.tree.style,
+                  shrinkWrap: context.parser.shrinkWrap,
+                  child: CssBoxWidget.withInlineSpanChildren(
+                    style: context.tree.style,
+                    children: [
+                      if (context.tree.element?.localName == 'li') const TextSpan(text: '\t•\t'),
+                      ...children,
+                    ],
+                  ),
+                ),
+              );
+            }),
+            tagMatcher('img'): CustomRender.widget(widget: (context, buildChildren) {
+              final url = context.tree.element!.attributes['src']!.replaceAll('../', '');
+              if (pages[ph.pageIndex].fileName.endsWith('capa.xhtml') ||
+                  pages[ph.pageIndex].fileName.endsWith('rosto.xhtml') ||
+                  pages[ph.pageIndex].fileName.contains('capa')) {
+                return Container(
+                  alignment: Alignment.center,
+                  // height: constraints.maxHeight,
+                  child: Image(
+                    image: MemoryImage(Uint8List.fromList(widget.controller._document!.Content!.Images![url]!.Content!)),
+                    fit: BoxFit.cover,
+                  ),
+                );
+              }
+
+              return Container(
+                alignment: Alignment.center,
+                child: Image(
+                  image: MemoryImage(Uint8List.fromList(widget.controller._document!.Content!.Images![url]!.Content!)),
+                  fit: BoxFit.cover,
+                ),
+              );
+            }),
+            marcadorTagMatcher(): CustomRender.inlineSpan(inlineSpan: (context, children) {
+              final element = context.tree.element!;
+              final highlightId = element.attributes['highlight-id'];
+              // final textColor = element.attributes['text-color'];
+              final Color textColor = Color(int.parse(element.attributes['text-color']!));
+              final Color bgColor = Color(int.parse(element.attributes['bg-color']!));
+
+              if (highlightId != null) {
+                final highlight = highlights.firstWhereOrNull((element) => element.id == int.tryParse(highlightId));
+                if (highlight != null) {
+                  return TextSpan(
+                    text: context.tree.element?.text ?? "",
+                    style: context.style.generateTextStyle().copyWith(color: textColor, backgroundColor: bgColor),
+                    recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(highlight),
+                  );
+                }
+              }
+
+              return TextSpan(
+                text: context.tree.element?.text ?? "",
+                style: context.style.generateTextStyle(),
+              );
+            }),
+          },
+        ),
+      ),
+    );
+  }
+
+  List<Widget> pagesWidgetsFullscreen = [];
+  List<Widget> pagesWidgets = [];
+
   Widget _buildLoaded(BuildContext context) {
     final defaultBuilder = widget.builders as EpubViewBuilders<DefaultBuilderOptions>;
     final options = defaultBuilder.options;
 
-    return PageView.builder(
-      scrollDirection: Axis.horizontal,
-      itemCount: pages.length,
-      controller: pageController,
-      onPageChanged: updatePagePosition,
-      itemBuilder: (_, c) => Container(
-        // width: pageWidth,
-        // height: widget.height,
-        margin: !widget.isFullscreen ? const EdgeInsets.all(25) : const EdgeInsets.symmetric(horizontal: 25),
-        decoration: BoxDecoration(
-          boxShadow: !widget.isFullscreen
-              ? [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(.1),
-                    blurRadius: 10,
-                    offset: const Offset(0, 5),
+    return Container(
+      margin: !widget.isFullscreen ? const EdgeInsets.all(25) : const EdgeInsets.symmetric(horizontal: 5),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        boxShadow: !widget.isFullscreen
+            ? [
+                BoxShadow(
+                  color: Colors.black.withOpacity(.1),
+                  blurRadius: 10,
+                  offset: const Offset(0, 5),
+                ),
+              ]
+            : null,
+        borderRadius: BorderRadius.circular(20),
+        border: !widget.isFullscreen ? Border.all(color: Colors.grey.shade300) : null,
+        color: widget.isFullscreen ? null : widget.backgroundColor,
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          pageWidth = constraints.maxWidth;
+
+          if (pagesWidgets.isEmpty && !widget.isFullscreen) {
+            pagesWidgets = pages.map((page) {
+              // adiciona uma key no Wrap e salva na lista com o nome da page
+              if (pagesKey[page.fileName] == null) {
+                pagesKey[page.fileName] = GlobalKey();
+              }
+
+              return SliverToBoxAdapter(
+                child: Wrap(
+                  key: pagesKey[page.fileName],
+                  direction: Axis.vertical,
+                  children: page.paragraphs.map((e) {
+                    // adiciona a key para o paragraph específico
+                    if (paragraphKeys[e.paragraphIndex] == null) {
+                      paragraphKeys[e.paragraphIndex] = GlobalKey();
+                    }
+
+                    return SizedBox(
+                      key: paragraphKeys[e.paragraphIndex],
+                      width: constraints.maxWidth,
+                      child: itemParagraph(e, page.index),
+                    );
+                  }).toList(),
+                ),
+              );
+            }).toList();
+          }
+
+          if (pagesWidgetsFullscreen.isEmpty && widget.isFullscreen) {
+            pagesWidgetsFullscreen = pages.map((page) {
+              // adiciona uma key no Wrap e salva na lista com o nome da page
+              if (pagesKey[page.fileName] == null) {
+                pagesKey[page.fileName] = GlobalKey();
+              }
+
+              return SliverToBoxAdapter(
+                child: Wrap(
+                  key: pagesKey[page.fileName],
+                  direction: Axis.vertical,
+                  children: page.paragraphs.map((e) {
+                    // adiciona a key para o paragraph específico
+                    if (paragraphKeys[e.paragraphIndex] == null) {
+                      paragraphKeys[e.paragraphIndex] = GlobalKey();
+                    }
+
+                    return SizedBox(
+                      key: paragraphKeys[e.paragraphIndex],
+                      width: constraints.maxWidth,
+                      child: itemParagraph(e, page.index),
+                    );
+                  }).toList(),
+                ),
+              );
+            }).toList();
+          }
+
+          return SizedBox(
+            height: constraints.maxHeight,
+            child: ValueListenableBuilder<bool>(
+              valueListenable: _controller.isBookLoaded,
+              builder: (_, isReady, child) => isReady ? child! : const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (ScrollNotification notification) {
+                  if (notification is ScrollEndNotification) {
+                    updatePagePosition();
+                  }
+
+                  return true;
+                },
+                child: SizeReportingWidget(
+                  onSizeChange: (_) {
+                    gotoInitialPage();
+                    Future.delayed(const Duration(seconds: 1), () => updateTotalPages());
+                  },
+                  child: CustomScrollView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const PageScrollPhysics(),
+                    controller: pageController,
+                    slivers: pages.map((page) {
+                      // adiciona uma key no Wrap e salva na lista com o nome da page
+                      if (pagesKey[page.fileName] == null) {
+                        pagesKey[page.fileName] = GlobalKey();
+                      }
+
+                      return SliverToBoxAdapter(
+                        child: Wrap(
+                          key: pagesKey[page.fileName],
+                          direction: Axis.vertical,
+                          children: page.paragraphs.map((e) {
+                            // adiciona a key para o paragraph específico
+                            if (paragraphKeys[e.paragraphIndex] == null) {
+                              paragraphKeys[e.paragraphIndex] = GlobalKey();
+                            }
+
+                            return SizedBox(
+                              key: paragraphKeys[e.paragraphIndex],
+                              width: constraints.maxWidth,
+                              child: itemParagraph(e, page.index),
+                            );
+                          }).toList(),
+                        ),
+                      );
+                    }).toList(),
                   ),
-                ]
-              : null,
-          borderRadius: BorderRadius.circular(20),
-          border: !widget.isFullscreen ? Border.all(color: Colors.grey.shade300) : null,
-          color: widget.isFullscreen ? null : widget.backgroundColor,
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: LayoutBuilder(
-              builder: (context, constraints) => ListView.builder(
-                    controller: scrollController,
-                    scrollDirection: Axis.vertical,
-                    itemCount: pages[c].paragraphs.length,
-                    itemBuilder: (_, p) => SelectionArea(
-                      selectionControls: widget.selectionToolbar,
-                      onSelectionChanged: widget.onSelectionChanged,
-                      child: Html(
-                        shrinkWrap: true,
-                        data: pages[c].paragraphs[p].element.outerHtml,
-                        // data: parseHightlights(c, pages[c].paragraphs[p].element.outerHtml),
-                        onLinkTap: (href, _, __, ___) => _onLinkPressed(href!),
-                        style: {
-                          '*': Style(
-                            color: widget.foregroundColor,
-                            fontFamily: widget.fontFamily,
-                            fontSize: numberToFontSize('$fontSize'),
-                            textAlign: TextAlign.justify,
-                          ),
-                          'a': Style(textDecoration: TextDecoration.none),
-                        },
-                        customRenders: {
-                          // tagMatcher('a'): CustomRender.widget(widget: (context, buildChildren) {
-                          //   final String? url = context.tree.element?.attributes['href'];
-                          //   if (url?.startsWith('.') == true) {
-                          //     return GestureDetector(
-                          //       onTap: () => _onLinkPressed(url),
-                          //       child: Text(context.tree.element?.text ?? ""),
-                          //     );
-                          //   }
-
-                          //   return buildChildren;
-                          //   return Text(context.tree.element?.text ?? "");
-                          // }),
-                          paragrafoTagMatcher(): CustomRender.inlineSpan(inlineSpan: (context, buildChildren) {
-                            var originalText = context.tree.element?.text.trim();
-
-                            if (originalText == null || originalText.trim() == "") {
-                              return const TextSpan();
-                            }
-
-                            // var originalText = (context.tree as TextContentElement).text?.trim();
-                            var marcacoesNaPage = highlights.where((element) => element.pagePosition.page == c).toList();
-                            // caso não tenha nenhuma marcação, exibe apenas o texto limpo
-                            if (marcacoesNaPage.isEmpty) {
-                              return WidgetSpan(
-                                child: CssBoxWidget(
-                                  key: context.key,
-                                  style: Style(),
-                                  shrinkWrap: context.parser.shrinkWrap,
-                                  child: CssBoxWidget.withInlineSpanChildren(
-                                    style: context.tree.style,
-                                    children: [
-                                      if (context.tree.element?.localName == 'li') const TextSpan(text: '\t•\t'),
-                                      TextSpan(
-                                        text: originalText,
-                                        style: context.style.generateTextStyle(),
-                                      )
-                                    ],
-                                  ),
-                                ),
-                              );
-                            }
-
-                            // buildChildren()
-                            //             .map((e) => TextSpan(text: originalText, style: context.tree.style.generateTextStyle()))
-                            //             .toList(),
-
-                            // print('full: ${jsonEncode(originalText)} / ${marcacoesNaPage.length}');
-
-                            // for (var tr in marcacoesNaPage) {
-                            //   print('tr: ${jsonEncode(tr.text)}');
-                            // }
-
-                            // caso a marcação seja o paragrafo inteiro
-                            // final singleHigh = marcacoesNaPage.singleWhereOrNull((element) => element.text == originalText?.trim());
-
-                            // if (singleHigh != null) {
-                            //   var high = marcacoesNaPage.first;
-                            //   Color textColor = Colors.black;
-
-                            //   if (high.color == const Color(0xFF003B65)) {
-                            //     textColor = Colors.white;
-                            //   }
-
-                            //   return TextSpan(
-                            //     text: originalText,
-                            //     style: TextStyle(color: textColor, backgroundColor: high.color),
-                            //     recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(high),
-                            //   );
-                            // }
-
-                            String marcacoes = marcacoesNaPage.map((e) => e.text).map((e) => '($e)').join('|').toString();
-                            RegExp regex = RegExp(marcacoes);
-
-                            Iterable<Match> matches = regex.allMatches(originalText);
-
-                            int lastIndex = 0;
-                            List<InlineSpan> children = [];
-
-                            for (Match match in matches) {
-                              int startIndex = match.start;
-                              int endIndex = match.end;
-
-                              String? trechoAntes = originalText.substring(lastIndex, startIndex);
-                              String? trechoMarcado = match.group(0);
-
-                              var high = marcacoesNaPage.firstWhere((element) => element.text == trechoMarcado);
-
-                              Color textColor = Colors.black;
-
-                              if (high.color == const Color(0xFF003B65)) {
-                                textColor = Colors.white;
-                              }
-
-                              // if (context.tree.element?.localName == 'li') children.add(const TextSpan(text: '•\t'));
-
-                              children.add(TextSpan(text: trechoAntes));
-
-                              if (trechoMarcado != null && trechoMarcado != "") {
-                                children.add(TextSpan(
-                                  text: trechoMarcado,
-                                  style: TextStyle(color: textColor, backgroundColor: high.color),
-                                  recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(high),
-                                ));
-
-                                if (originalText.substring(match.end, (match.end < originalText.length ? match.end + 1 : originalText.length)) ==
-                                    " ") {
-                                  // adiciona um espaço
-                                  children.add(const TextSpan(text: '\r'));
-                                }
-                              }
-
-                              lastIndex = endIndex;
-                            }
-
-                            if (lastIndex < (originalText.length)) {
-                              String trechoDepois = originalText.substring(lastIndex).trim();
-                              if (trechoDepois != "") {
-                                children.add(TextSpan(text: trechoDepois));
-                              }
-                            }
-
-                            // var matches = regex.allMatches(originalText ?? "");
-                            // for (var match in matches) {
-                            //   print(match.group(0));
-                            // }
-                            return WidgetSpan(
-                              child: CssBoxWidget(
-                                key: context.key,
-                                style: Style(),
-                                shrinkWrap: context.parser.shrinkWrap,
-                                child: CssBoxWidget.withInlineSpanChildren(
-                                  style: context.tree.style,
-                                  children: [
-                                    if (context.tree.element?.localName == 'li') const TextSpan(text: '\t•\t'),
-                                    ...children,
-                                  ],
-                                ),
-                              ),
-                            );
-
-                            if (originalText == null || originalText.trim() == "") {
-                              return const TextSpan();
-                            } else {
-                              // var originalText = parseHightlights(c, (context.tree as TextContentElement).text ?? "");
-
-                              return TextSpan(
-                                // text: originalText,
-                                children: children,
-                                style: context.style.generateTextStyle(),
-                              );
-                            }
-                          }),
-                          tagMatcher('11'): CustomRender.inlineSpan(
-                            inlineSpan: (context, buildChildren) {
-                              return WidgetSpan(
-                                child: CssBoxWidget(
-                                  key: context.key,
-                                  style: context.tree.style,
-                                  shrinkWrap: context.parser.shrinkWrap,
-                                  child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    textDirection: context.tree.style.direction,
-                                    children: [
-                                      context.tree.style.listStylePosition == ListStylePosition.outside
-                                          ? Padding(
-                                              padding: context.tree.style.padding?.nonNegative ??
-                                                  EdgeInsets.only(
-                                                      left: (context.tree.style.direction) != TextDirection.rtl ? 10.0 : 0.0,
-                                                      right: (context.tree.style.direction) == TextDirection.rtl ? 10.0 : 0.0),
-                                              child: context.style.markerContent)
-                                          : const SizedBox(height: 0, width: 0),
-                                      const Text("\u0020", textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w400)),
-                                      Expanded(
-                                        child: Padding(
-                                          padding: (context.tree.style.listStylePosition) == ListStylePosition.inside
-                                              ? EdgeInsets.only(
-                                                  left: (context.tree.style.direction) != TextDirection.rtl ? 10.0 : 0.0,
-                                                  right: (context.tree.style.direction) == TextDirection.rtl ? 10.0 : 0.0)
-                                              : EdgeInsets.zero,
-                                          child: CssBoxWidget.withInlineSpanChildren(
-                                            children: _getListElementChildren(context.tree.style.listStylePosition, buildChildren)
-                                              ..insertAll(
-                                                  0,
-                                                  context.tree.style.listStylePosition == ListStylePosition.inside
-                                                      ? [
-                                                          WidgetSpan(
-                                                              alignment: PlaceholderAlignment.middle,
-                                                              child: context.style.markerContent ?? const SizedBox(height: 0, width: 0))
-                                                        ]
-                                                      : []),
-                                            style: context.style,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                          tagMatcher('img'): CustomRender.widget(widget: (context, buildChildren) {
-                            final url = context.tree.element!.attributes['src']!.replaceAll('../', '');
-                            if (pages[c].fileName.endsWith('capa.xhtml') ||
-                                pages[c].fileName.endsWith('rosto.xhtml') ||
-                                pages[c].fileName.contains('capa')) {
-                              return Container(
-                                alignment: Alignment.center,
-                                height: constraints.maxHeight,
-                                child: Image(
-                                  image: MemoryImage(Uint8List.fromList(widget.controller._document!.Content!.Images![url]!.Content!)),
-                                  fit: BoxFit.cover,
-                                ),
-                              );
-                            }
-
-                            return Container(
-                              alignment: Alignment.center,
-                              child: Image(
-                                image: MemoryImage(Uint8List.fromList(widget.controller._document!.Content!.Images![url]!.Content!)),
-                                fit: BoxFit.cover,
-                              ),
-                            );
-                          }),
-                          marcadorTagMatcher(): CustomRender.inlineSpan(inlineSpan: (context, children) {
-                            final element = context.tree.element!;
-                            final highlightId = element.attributes['highlight-id'];
-                            // final textColor = element.attributes['text-color'];
-                            final Color textColor = Color(int.parse(element.attributes['text-color']!));
-                            final Color bgColor = Color(int.parse(element.attributes['bg-color']!));
-
-                            if (highlightId != null) {
-                              final highlight = highlights.firstWhereOrNull((element) => element.id == int.tryParse(highlightId));
-                              if (highlight != null) {
-                                return TextSpan(
-                                  text: context.tree.element?.text ?? "",
-                                  style: context.style.generateTextStyle().copyWith(color: textColor, backgroundColor: bgColor),
-                                  recognizer: TapGestureRecognizer()..onTap = () => widget.onHighlightPressed?.call(highlight),
-                                );
-                              }
-                            }
-
-                            return TextSpan(
-                              text: context.tree.element?.text ?? "",
-                              style: context.style.generateTextStyle(),
-                            );
-                          }),
-                        },
-                      ),
-                    ),
-                  )),
-        ),
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }

@@ -19,7 +19,10 @@ class EpubController {
   List<EpubViewChapter>? _cacheTableOfContents;
   List<EpubContentFile> get pagesFiles => getFilesFromEpubSpine(_document!);
   List<EpubPage> get pages => _document != null ? parsePages(pagesFiles, _document!) : [];
-  int get totalPages => pages.length;
+  // int get totalPages => pages.length;
+  int paragraphTouched = 0;
+
+  // int get currentPage => _epubViewState?.pageController.page?.round() ?? 0;
 
   EpubBook? _document;
 
@@ -30,9 +33,21 @@ class EpubController {
 
   final currentValueListenable = ValueNotifier<EpubChapterViewValue?>(null);
 
-  late final position = ValueNotifier<EpubPagePosition>(EpubPagePosition(page: 0, totalPages: totalPages, scrollPosition: 0));
+  // late final position = ValueNotifier<EpubPagePosition>(EpubPagePosition(page: 0, totalPages: totalPages, scrollPosition: 0));
 
-  void navigateToPage(int page, [int? scroll]) {
+  final currentPage = ValueNotifier<int>(0);
+  // int get currentPage => _currentPage.value;
+
+  final totalPages = ValueNotifier<int>(0);
+  // int get totalPages => _totalPages.value;
+
+  void update() => _epubViewState?.update();
+
+  void navigateToParagraph(int index) {
+    _epubViewState?.navigateToParagraph(index);
+  }
+
+  void navigateToPage(int page, [double? scroll]) {
     _epubViewState?.navigateToPage(page, scroll);
   }
 
@@ -41,11 +56,11 @@ class EpubController {
   }
 
   void nextPage() {
-    _epubViewState?.pageController.nextPage(duration: const Duration(milliseconds: 350), curve: Curves.ease);
+    _epubViewState?.nextPage();
   }
 
   void prevPage() {
-    _epubViewState?.pageController.previousPage(duration: const Duration(milliseconds: 350), curve: Curves.ease);
+    _epubViewState?.prevPage();
   }
 
   void increaseFontSize() {
@@ -57,11 +72,6 @@ class EpubController {
   }
 
   final tableOfContentsListenable = ValueNotifier<List<EpubViewChapter>>([]);
-
-  void jumpTo({required int index, double alignment = 0}) => _epubViewState?._itemScrollController?.jumpTo(
-        index: index,
-        alignment: alignment,
-      );
 
   Future<void>? scrollTo({
     required int index,
@@ -142,7 +152,7 @@ class EpubController {
     try {
       loadingState.value = EpubViewLoadingState.loading;
       _document = document;
-      await _epubViewState!._init();
+      await _epubViewState!.init();
 
       tableOfContentsListenable.value = tableOfContents();
       loadingState.value = EpubViewLoadingState.success;

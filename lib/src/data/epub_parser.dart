@@ -24,7 +24,7 @@ List<dom.Element> _removeAllDiv(List<dom.Element> elements) {
   final List<dom.Element> result = [];
 
   for (final node in elements) {
-    if (node.localName == 'div' && node.children.length > 1) {
+    if ((node.localName == 'div' || node.localName == 'blockquote') && node.children.length > 1) {
       result.addAll(_removeAllDiv(node.children));
     } else {
       result.add(node);
@@ -39,6 +39,7 @@ List<EpubPage> parsePages(List<EpubContentFile> contentPages, EpubBook epubBook)
   List<EpubPage> pages = [];
   List<int> chapterIndexes = [];
   int pageIndex = 0;
+  int paragraphIndex = 0;
 
   for (var next in contentPages) {
     List<Paragraph> paragrafos = [];
@@ -69,8 +70,13 @@ List<EpubPage> parsePages(List<EpubContentFile> contentPages, EpubBook epubBook)
       }
     }
 
+    for (var el in elmList) {
+      paragrafos.add(Paragraph(el, paragraphIndex, pageIndex));
+      paragraphIndex++;
+    }
+
     pageIndex++;
-    paragrafos.addAll(elmList.map((element) => Paragraph(element, chapterIndexes.length - 1)));
+    // paragrafos.addAll(elmList.map((element) => Paragraph(element, chapterIndexes.length - 1)));
     pages.add(EpubPage(index: pageIndex, fileName: filename!, paragraphs: paragrafos));
     // chapterIndexes.add(acc.length);
     // acc.addAll(elmList.map((element) => Paragraph(element, chapterIndexes.length - 1)));
